@@ -42,16 +42,9 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
   },
 }))
 
-app.get('/api/health', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Certificate Studio API is healthy',
-    data: {
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString(),
-    },
-  })
-})
+  app.get("/", (req, res) => {
+    res.send("Backend is running!");
+  });
 
 app.use('/api/auth', authRoutes)
 app.use('/api/templates', templateRoutes)
