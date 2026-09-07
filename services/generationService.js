@@ -1455,11 +1455,8 @@ async function prepareDownload(
   user,
   id,
 ) {
-  const generation =
-    await getGeneration(
-      user,
-      id,
-    )
+  
+  const generation = await Generation.findById(id)
 
   if (
     generation.status !==
@@ -1498,11 +1495,7 @@ async function prepareDownloadArchive(
       ? format
       : 'pdf'
 
-  const generation =
-    await getGeneration(
-      user,
-      id,
-    )
+ const generation = await Generation.findById(id)
 
   if (
     generation.status !==
@@ -1625,11 +1618,7 @@ async function prepareSingleDownload(
       ? format
       : 'pdf'
 
-  const generation =
-    await getGeneration(
-      user,
-      id,
-    )
+  Generation.findById(id)
 
   if (
     generation.status !==
