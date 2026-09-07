@@ -117,6 +117,18 @@ function normalizeKey(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
 }
 
+function humanizeField(field) {
+  return (field || 'dynamic field')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function isSingleGeneration(generation) {
+  return !!(generation && (generation.mode === 'single' || !generation.dataFileId))
+}
+
 function resolveRowValue(row, field, mapping) {
   const mappedColumn = mapping?.[field] || field
   if (row[mappedColumn] !== undefined && row[mappedColumn] !== null) return row[mappedColumn]
@@ -275,17 +287,18 @@ function hydrateFabricAssetSources(value) {
   return next
 }
 
-function resolveFabricDynamicText(canvas, row, mapping) {
+function resolveFabricDynamicText(canvas, row, mapping, isSingle) {
   canvas.getObjects().forEach((object) => {
     if (object.elementType === 'dynamic-text' || object.certType === 'dynamic-text') {
       const field = object.fieldKey || object.certField
-      object.set('text', String(resolveRowValue(row, field, mapping)))
+      const resolved = String(resolveRowValue(row, field, mapping) || '')
+      object.set('text', isSingle && !resolved ? humanizeField(field) : resolved)
       object.setCoords()
     }
   })
 }
 
-async function renderFabricDataUrl({ template, row, mapping, format = 'png', multiplier = 1 }) {
+async function renderFabricDataUrl({ template, row, mapping, format = 'png', multiplier = 1, singleMode = false }) {
   const { width, height, json } = designToFabricJson(template)
   const hydratedJson = hydrateFabricAssetSources(json)
   const canvas = new fabric.StaticCanvas(null, {
@@ -318,7 +331,7 @@ async function renderFabricDataUrl({ template, row, mapping, format = 'png', mul
       }
       object.setCoords()
     })
-    resolveFabricDynamicText(canvas, row, mapping)
+    resolveFabricDynamicText(canvas, row, mapping, singleMode)
     canvas.renderAll()
     return {
       width,
@@ -334,8 +347,8 @@ async function renderFabricDataUrl({ template, row, mapping, format = 'png', mul
   }
 }
 
-async function buildPdf({ template, row, mapping }) {
-  const rendered = await renderFabricDataUrl({ template, row, mapping, format: 'jpeg' })
+async function buildPdf({ template, row, mapping, singleMode = false }) {
+  const rendered = await renderFabricDataUrl({ template, row, mapping, format: 'jpeg', singleMode })
   const width = rendered.width
   const height = rendered.height
   const imageBuffer = dataUrlToBuffer(rendered.dataUrl)
@@ -371,13 +384,22 @@ async function buildPdf({ template, row, mapping }) {
 
 async function createGeneratedFiles(generation, template, dataFile, mapping, requestScope, selectedRecordIds) {
   await fs.mkdir(GENERATED_DIR, { recursive: true })
-  const selectedSet = new Set(selectedRecordIds || [])
-  const rows = requestScope === 'selected'
-    ? dataFile.rows.filter((row, index) => selectedSet.has(String(row._id || index)) || selectedSet.has(String(index)))
-    : dataFile.rows
+  const single = isSingleGeneration(generation)
+  let rows
+  if (!dataFile) {
+    rows = [{}]
+  } else if (single) {
+    rows = [{}]
+  } else {
+    const selectedSet = new Set(selectedRecordIds || [])
+    rows = requestScope === 'selected'
+      ? dataFile.rows.filter((row, index) => selectedSet.has(String(row._id || index)) || selectedSet.has(String(index)))
+      : dataFile.rows
+  }
 
   const generatedFiles = []
   const safeFormat = ['pdf', 'png', 'jpg', 'jpeg'].includes(generation.outputFormat) ? generation.outputFormat : 'pdf'
+  const renderTemplate = generation.design ? { design: generation.design, width: template.width, height: template.height } : template
 
   for (const [index, row] of rows.entries()) {
     const extension = outputExtension(safeFormat)
@@ -385,7 +407,7 @@ async function createGeneratedFiles(generation, template, dataFile, mapping, req
     const absolutePath = path.join(GENERATED_DIR, fileName)
 
     await fs.rm(absolutePath, { force: true })
-    await fs.writeFile(absolutePath, await renderGeneratedBuffer({ template, row, mapping, format: safeFormat }))
+    await fs.writeFile(absolutePath, await renderGeneratedBuffer({ template: renderTemplate, row, mapping, format: safeFormat, singleMode: single }))
     generatedFiles.push({
       fileName,
       filePath: `/uploads/generated/${fileName}`,
@@ -403,10 +425,10 @@ function outputExtension(format) {
   return 'pdf'
 }
 
-async function renderGeneratedBuffer({ template, row, mapping, format }) {
-  if (format === 'pdf') return buildPdf({ template, row, mapping })
+async function renderGeneratedBuffer({ template, row, mapping, format, singleMode = false }) {
+  if (format === 'pdf') return buildPdf({ template, row, mapping, singleMode })
   if (format === 'png' || format === 'jpg' || format === 'jpeg') {
-    const rendered = await renderFabricDataUrl({ template, row, mapping, format })
+    const rendered = await renderFabricDataUrl({ template, row, mapping, format, singleMode })
     return dataUrlToBuffer(rendered.dataUrl)
   }
   throw new ApiError(400, 'Unsupported download format')
@@ -433,7 +455,7 @@ async function runGeneration(generation, template, dataFile, mapping) {
     )
     generation.generatedFiles = generatedFiles
     generation.successfulRecords = generatedFiles.length
-    generation.totalRecords = generation.totalRecords || dataFile.recordCount || generatedFiles.length
+    generation.totalRecords = generation.totalRecords || (dataFile ? dataFile.recordCount : 1) || generatedFiles.length
     generation.failedRecords = Math.max((generation.totalRecords || 0) - generatedFiles.length, 0)
     generation.generatedFilePath = generatedFiles[0]?.filePath || ''
     generation.fileUrl = generatedFiles[0]?.filePath || ''
@@ -450,32 +472,44 @@ async function runGeneration(generation, template, dataFile, mapping) {
 }
 
 async function createGeneration(user, payload) {
-  const { templateId, dataFileId, outputFormat = 'pdf', requestScope = 'all', selectedRecordIds = [], fieldMapping } = payload
+  const { templateId, mode = 'bulk', dataFileId, outputFormat = 'pdf', requestScope = 'all', selectedRecordIds = [], fieldMapping, design: designOverride } = payload
 
-  if (!templateId || !dataFileId) {
-    throw new ApiError(400, 'templateId and dataFileId are required')
+  if (!templateId) {
+    throw new ApiError(400, 'templateId is required')
   }
 
   const template = await Template.findById(templateId)
   if (!template) throw new ApiError(404, 'Template not found')
   if (!canAccess(user, template.createdBy)) throw new ApiError(403, 'You do not have access to this template')
 
-  const dataFile = await DataFile.findById(dataFileId)
-  if (!dataFile) throw new ApiError(404, 'Data file not found')
-  if (!canAccess(user, dataFile.uploadedBy)) throw new ApiError(403, 'You do not have access to this data file')
+  const isSingle = mode === 'single'
 
-  const effectiveMapping = fieldMapping || Object.fromEntries(template.fieldMapping || [])
+  let dataFile = null
+  if (!isSingle) {
+    if (!dataFileId) {
+      throw new ApiError(400, 'dataFileId is required for bulk generation')
+    }
+    dataFile = await DataFile.findById(dataFileId)
+    if (!dataFile) throw new ApiError(404, 'Data file not found')
+    if (!canAccess(user, dataFile.uploadedBy)) throw new ApiError(403, 'You do not have access to this data file')
+  }
+
+  const effectiveMapping = isSingle
+    ? (fieldMapping || {})
+    : (fieldMapping || Object.fromEntries(template.fieldMapping || []))
 
   const generation = await Generation.create({
     templateId,
-    dataFileId,
+    dataFileId: dataFile ? dataFile._id : null,
+    mode: isSingle ? 'single' : 'bulk',
+    design: isSingle && designOverride ? designOverride : null,
     createdBy: user._id,
     userId: user._id,
     templateName: template.name,
     generatedFormat: outputFormat,
     isArchived: false,
     archivedAt: null,
-    totalRecords: requestScope === 'selected' ? selectedRecordIds.length : dataFile.recordCount,
+    totalRecords: isSingle ? 1 : (requestScope === 'selected' ? selectedRecordIds.length : dataFile.recordCount),
     outputFormat,
     requestScope,
     selectedRecordIds,
@@ -522,6 +556,18 @@ async function getGeneration(user, id) {
   return generation
 }
 
+function renderTemplateForGeneration(generation) {
+  if (generation && generation.design) {
+    return { design: generation.design, width: generation.templateId?.width, height: generation.templateId?.height }
+  }
+  return generation.templateId
+}
+
+function rowsForGeneration(generation) {
+  if (generation.dataFileId) return generation.dataFileId.rows || []
+  return [{}]
+}
+
 async function prepareDownload(user, id) {
   const generation = await getGeneration(user, id)
 
@@ -546,12 +592,18 @@ async function prepareDownloadArchive(user, id, format = 'pdf') {
 
   if (!generation.generatedFiles.length) throw new ApiError(404, 'No files are available')
 
-  const archiveFiles = await Promise.all(generation.dataFileId.rows.map(async (row, index) => {
+  const single = isSingleGeneration(generation)
+  const mapping = Object.fromEntries(generation.fieldMapping || [])
+  const rows = rowsForGeneration(generation)
+  const renderTemplate = renderTemplateForGeneration(generation)
+
+  const archiveFiles = await Promise.all(rows.map(async (row, index) => {
     const buffer = await renderGeneratedBuffer({
-      template: generation.templateId,
+      template: renderTemplate,
       row,
-      mapping: Object.fromEntries(generation.fieldMapping || []),
+      mapping,
       format: safeFormat,
+      singleMode: single,
     })
     return {
       name: `certificate-${index + 1}.${outputExtension(safeFormat)}`,
@@ -574,17 +626,20 @@ async function prepareSingleDownload(user, id, recordIndex = 0, format = 'pdf') 
     throw new ApiError(409, 'Generation is not completed yet')
   }
 
-  const row = generation.dataFileId.rows[Number(recordIndex) || 0]
+  const single = isSingleGeneration(generation)
+  const mapping = Object.fromEntries(generation.fieldMapping || [])
+  const row = rowsForGeneration(generation)[Number(recordIndex) || 0]
   if (!row) throw new ApiError(404, 'Certificate row not found')
 
   return {
     fileName: `certificate-${(Number(recordIndex) || 0) + 1}.${outputExtension(safeFormat)}`,
     mimeType: mimeForFormat(safeFormat),
     buffer: await renderGeneratedBuffer({
-      template: generation.templateId,
+      template: renderTemplateForGeneration(generation),
       row,
-      mapping: Object.fromEntries(generation.fieldMapping || []),
+      mapping,
       format: safeFormat,
+      singleMode: single,
     }),
   }
 }

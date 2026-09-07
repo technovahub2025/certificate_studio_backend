@@ -57,6 +57,11 @@ const templateSchema = new mongoose.Schema(
       maxlength: 160,
     },
     description: { type: String, trim: true, default: '' },
+    mode: {
+      type: String,
+      enum: ['single', 'bulk'],
+      default: 'single',
+    },
     originalFile: String,
     thumbnail: String,
     fileType: {

@@ -11,8 +11,17 @@ const generationSchema = new mongoose.Schema(
     dataFileId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'DataFile',
-      required: true,
       index: true,
+    },
+    mode: {
+      type: String,
+      enum: ['single', 'bulk'],
+      default: 'bulk',
+      index: true,
+    },
+    design: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

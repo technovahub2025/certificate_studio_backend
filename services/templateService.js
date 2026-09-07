@@ -51,6 +51,7 @@ async function createTemplate(user, payload, file) {
   const template = await Template.create({
     name: payload.name,
     description: payload.description || '',
+    mode: payload.mode || 'single',
     originalFile: file?.path,
     fileType: file ? path.extname(file.originalname).slice(1).toLowerCase() : payload.fileType || 'json',
     width,
@@ -84,6 +85,7 @@ async function updateTemplate(user, id, payload, file) {
   const next = {
     name: payload.name ?? template.name,
     description: payload.description ?? template.description,
+    mode: payload.mode ?? (template.mode || 'single'),
     width: payload.width === undefined ? template.width : Number(payload.width),
     height: payload.height === undefined ? template.height : Number(payload.height),
     thumbnail: payload.thumbnail ?? template.thumbnail,
