@@ -7,7 +7,12 @@ const DataFile = require('../models/DataFile')
 const ApiError = require('../utils/ApiError')
 const { historyRetentionCutoff } = require('../config/history')
 
-const GENERATED_DIR = path.join(__dirname, '..', 'uploads', 'generated')
+const GENERATED_DIR = path.join(
+  __dirname,
+  '..',
+  'uploads',
+  'generated',
+)
 
 // Keep this at 2 for Render to avoid excessive RAM/CPU usage.
 const GENERATION_CONCURRENCY = Math.max(
@@ -29,24 +34,31 @@ const FABRIC_CUSTOM_PROPERTIES = [
   'desiredHeight',
 ]
 
-fabric.FabricObject.customProperties = FABRIC_CUSTOM_PROPERTIES
+fabric.FabricObject.customProperties =
+  FABRIC_CUSTOM_PROPERTIES
 
-const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
-  let value = index
+const CRC_TABLE = Array.from(
+  { length: 256 },
+  (_, index) => {
+    let value = index
 
-  for (let bit = 0; bit < 8; bit += 1) {
-    value = value & 1
-      ? 0xedb88320 ^ (value >>> 1)
-      : value >>> 1
-  }
+    for (let bit = 0; bit < 8; bit += 1) {
+      value =
+        value & 1
+          ? 0xedb88320 ^
+            (value >>> 1)
+          : value >>> 1
+    }
 
-  return value >>> 0
-})
+    return value >>> 0
+  },
+)
 
 function canAccess(user, ownerId) {
   return (
     user.role === 'admin' ||
-    ownerId.toString() === user._id.toString()
+    ownerId.toString() ===
+      user._id.toString()
   )
 }
 
@@ -54,26 +66,43 @@ function crc32(buffer) {
   let value = 0xffffffff
 
   for (const byte of buffer) {
-    value = CRC_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8)
+    value =
+      CRC_TABLE[
+        (value ^ byte) & 0xff
+      ] ^
+      (value >>> 8)
   }
 
-  return (value ^ 0xffffffff) >>> 0
+  return (
+    value ^
+    0xffffffff
+  ) >>> 0
 }
 
-function dosDateTime(date = new Date()) {
-  const year = Math.max(date.getFullYear(), 1980)
+function dosDateTime(
+  date = new Date(),
+) {
+  const year = Math.max(
+    date.getFullYear(),
+    1980,
+  )
 
   const dosTime =
     (date.getHours() << 11) |
     (date.getMinutes() << 5) |
-    Math.floor(date.getSeconds() / 2)
+    Math.floor(
+      date.getSeconds() / 2,
+    )
 
   const dosDate =
     ((year - 1980) << 9) |
     ((date.getMonth() + 1) << 5) |
     date.getDate()
 
-  return { dosTime, dosDate }
+  return {
+    dosTime,
+    dosDate,
+  }
 }
 
 function createZip(files) {
@@ -81,25 +110,75 @@ function createZip(files) {
   const centralParts = []
   let offset = 0
 
-  const { dosTime, dosDate } = dosDateTime()
+  const {
+    dosTime,
+    dosDate,
+  } = dosDateTime()
 
   for (const file of files) {
-    const nameBuffer = Buffer.from(file.name)
-    const checksum = crc32(file.buffer)
+    const nameBuffer =
+      Buffer.from(file.name)
 
-    const localHeader = Buffer.alloc(30)
+    const checksum =
+      crc32(file.buffer)
 
-    localHeader.writeUInt32LE(0x04034b50, 0)
-    localHeader.writeUInt16LE(20, 4)
-    localHeader.writeUInt16LE(0, 6)
-    localHeader.writeUInt16LE(0, 8)
-    localHeader.writeUInt16LE(dosTime, 10)
-    localHeader.writeUInt16LE(dosDate, 12)
-    localHeader.writeUInt32LE(checksum, 14)
-    localHeader.writeUInt32LE(file.buffer.length, 18)
-    localHeader.writeUInt32LE(file.buffer.length, 22)
-    localHeader.writeUInt16LE(nameBuffer.length, 26)
-    localHeader.writeUInt16LE(0, 28)
+    const localHeader =
+      Buffer.alloc(30)
+
+    localHeader.writeUInt32LE(
+      0x04034b50,
+      0,
+    )
+
+    localHeader.writeUInt16LE(
+      20,
+      4,
+    )
+
+    localHeader.writeUInt16LE(
+      0,
+      6,
+    )
+
+    localHeader.writeUInt16LE(
+      0,
+      8,
+    )
+
+    localHeader.writeUInt16LE(
+      dosTime,
+      10,
+    )
+
+    localHeader.writeUInt16LE(
+      dosDate,
+      12,
+    )
+
+    localHeader.writeUInt32LE(
+      checksum,
+      14,
+    )
+
+    localHeader.writeUInt32LE(
+      file.buffer.length,
+      18,
+    )
+
+    localHeader.writeUInt32LE(
+      file.buffer.length,
+      22,
+    )
+
+    localHeader.writeUInt16LE(
+      nameBuffer.length,
+      26,
+    )
+
+    localHeader.writeUInt16LE(
+      0,
+      28,
+    )
 
     localParts.push(
       localHeader,
@@ -107,25 +186,93 @@ function createZip(files) {
       file.buffer,
     )
 
-    const centralHeader = Buffer.alloc(46)
+    const centralHeader =
+      Buffer.alloc(46)
 
-    centralHeader.writeUInt32LE(0x02014b50, 0)
-    centralHeader.writeUInt16LE(20, 4)
-    centralHeader.writeUInt16LE(20, 6)
-    centralHeader.writeUInt16LE(0, 8)
-    centralHeader.writeUInt16LE(0, 10)
-    centralHeader.writeUInt16LE(dosTime, 12)
-    centralHeader.writeUInt16LE(dosDate, 14)
-    centralHeader.writeUInt32LE(checksum, 16)
-    centralHeader.writeUInt32LE(file.buffer.length, 20)
-    centralHeader.writeUInt32LE(file.buffer.length, 24)
-    centralHeader.writeUInt16LE(nameBuffer.length, 28)
-    centralHeader.writeUInt16LE(0, 30)
-    centralHeader.writeUInt16LE(0, 32)
-    centralHeader.writeUInt16LE(0, 34)
-    centralHeader.writeUInt16LE(0, 36)
-    centralHeader.writeUInt32LE(0, 38)
-    centralHeader.writeUInt32LE(offset, 42)
+    centralHeader.writeUInt32LE(
+      0x02014b50,
+      0,
+    )
+
+    centralHeader.writeUInt16LE(
+      20,
+      4,
+    )
+
+    centralHeader.writeUInt16LE(
+      20,
+      6,
+    )
+
+    centralHeader.writeUInt16LE(
+      0,
+      8,
+    )
+
+    centralHeader.writeUInt16LE(
+      0,
+      10,
+    )
+
+    centralHeader.writeUInt16LE(
+      dosTime,
+      12,
+    )
+
+    centralHeader.writeUInt16LE(
+      dosDate,
+      14,
+    )
+
+    centralHeader.writeUInt32LE(
+      checksum,
+      16,
+    )
+
+    centralHeader.writeUInt32LE(
+      file.buffer.length,
+      20,
+    )
+
+    centralHeader.writeUInt32LE(
+      file.buffer.length,
+      24,
+    )
+
+    centralHeader.writeUInt16LE(
+      nameBuffer.length,
+      28,
+    )
+
+    centralHeader.writeUInt16LE(
+      0,
+      30,
+    )
+
+    centralHeader.writeUInt16LE(
+      0,
+      32,
+    )
+
+    centralHeader.writeUInt16LE(
+      0,
+      34,
+    )
+
+    centralHeader.writeUInt16LE(
+      0,
+      36,
+    )
+
+    centralHeader.writeUInt32LE(
+      0,
+      38,
+    )
+
+    centralHeader.writeUInt32LE(
+      offset,
+      42,
+    )
 
     centralParts.push(
       centralHeader,
@@ -138,18 +285,53 @@ function createZip(files) {
       file.buffer.length
   }
 
-  const centralDirectory = Buffer.concat(centralParts)
+  const centralDirectory =
+    Buffer.concat(
+      centralParts,
+    )
 
-  const end = Buffer.alloc(22)
+  const end =
+    Buffer.alloc(22)
 
-  end.writeUInt32LE(0x06054b50, 0)
-  end.writeUInt16LE(0, 4)
-  end.writeUInt16LE(0, 6)
-  end.writeUInt16LE(files.length, 8)
-  end.writeUInt16LE(files.length, 10)
-  end.writeUInt32LE(centralDirectory.length, 12)
-  end.writeUInt32LE(offset, 16)
-  end.writeUInt16LE(0, 20)
+  end.writeUInt32LE(
+    0x06054b50,
+    0,
+  )
+
+  end.writeUInt16LE(
+    0,
+    4,
+  )
+
+  end.writeUInt16LE(
+    0,
+    6,
+  )
+
+  end.writeUInt16LE(
+    files.length,
+    8,
+  )
+
+  end.writeUInt16LE(
+    files.length,
+    10,
+  )
+
+  end.writeUInt32LE(
+    centralDirectory.length,
+    12,
+  )
+
+  end.writeUInt32LE(
+    offset,
+    16,
+  )
+
+  end.writeUInt16LE(
+    0,
+    20,
+  )
 
   return Buffer.concat([
     ...localParts,
@@ -161,88 +343,142 @@ function createZip(files) {
 function normalizeKey(value) {
   return String(value || '')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
+    .replace(
+      /[^a-z0-9]+/g,
+      '_',
+    )
+    .replace(
+      /^_+|_+$/g,
+      '')
 }
 
 function humanizeField(field) {
   return (field || 'dynamic field')
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(
+      /[_-]+/g,
+      ' ',
+    )
+    .replace(
+      /\s+/g,
+      ' ',
+    )
     .trim()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .replace(
+      /\b\w/g,
+      (letter) =>
+        letter.toUpperCase(),
+    )
 }
 
-function isSingleGeneration(generation) {
+function isSingleGeneration(
+  generation,
+) {
   return !!(
     generation &&
     (
-      generation.mode === 'single' ||
+      generation.mode ===
+        'single' ||
       !generation.dataFileId
     )
   )
 }
 
-function resolveRowValue(row, field, mapping) {
+function resolveRowValue(
+  row,
+  field,
+  mapping,
+) {
   const mappedColumn =
-    mapping?.[field] || field
+    mapping?.[field] ||
+    field
 
   if (
-    row[mappedColumn] !== undefined &&
+    row[mappedColumn] !==
+      undefined &&
     row[mappedColumn] !== null
   ) {
     return row[mappedColumn]
   }
 
-  const matchingColumn = Object.keys(row).find(
-    (column) =>
-      normalizeKey(column) ===
-      normalizeKey(mappedColumn),
-  )
+  const matchingColumn =
+    Object.keys(row).find(
+      (column) =>
+        normalizeKey(column) ===
+        normalizeKey(
+          mappedColumn,
+        ),
+    )
 
   return matchingColumn
     ? row[matchingColumn]
     : ''
 }
 
-function fileToDataUri(filePath) {
-  const ext = path
-    .extname(filePath)
-    .slice(1)
-    .toLowerCase()
+function fileToDataUri(
+  filePath,
+) {
+  const ext =
+    path
+      .extname(filePath)
+      .slice(1)
+      .toLowerCase()
 
   const mime =
-    ext === 'jpg' || ext === 'jpeg'
+    ext === 'jpg' ||
+    ext === 'jpeg'
       ? 'image/jpeg'
       : ext === 'svg'
         ? 'image/svg+xml'
         : 'image/png'
 
   const buffer =
-    require('fs').readFileSync(filePath)
+    require('fs').readFileSync(
+      filePath,
+    )
 
-  return `data:${mime};base64,${buffer.toString('base64')}`
+  return `data:${mime};base64,${buffer.toString(
+    'base64',
+  )}`
 }
 
 function uploadSourcePath(src) {
-  if (!src || src.startsWith('data:')) {
+  if (
+    !src ||
+    src.startsWith('data:')
+  ) {
     return ''
   }
 
   let source = src
 
-  if (/^https?:\/\//i.test(source)) {
+  if (
+    /^https?:\/\//i.test(
+      source,
+    )
+  ) {
     try {
-      const url = new URL(source)
-      source = url.pathname
+      const url = new URL(
+        source,
+      )
+
+      source =
+        url.pathname
     } catch {
       return ''
     }
   }
 
-  const relative = source.startsWith('/uploads/')
-    ? source.replace(/^\/uploads\//, '')
-    : path.basename(source)
+  const relative =
+    source.startsWith(
+      '/uploads/',
+    )
+      ? source.replace(
+          /^\/uploads\//,
+          '',
+        )
+      : path.basename(
+          source,
+        )
 
   return path.join(
     __dirname,
@@ -252,73 +488,117 @@ function uploadSourcePath(src) {
   )
 }
 
-function dataUrlToBuffer(dataUrl) {
+function dataUrlToBuffer(
+  dataUrl,
+) {
   return Buffer.from(
-    String(dataUrl).split(',')[1] || '',
+    String(dataUrl).split(
+      ',',
+    )[1] || '',
     'base64',
   )
 }
 
-function legacyElementToFabricObject(element) {
+function legacyElementToFabricObject(
+  element,
+) {
   const base = {
-    left: Number(element.x) || 0,
-    top: Number(element.y) || 0,
-    originX: element.originX || 'left',
-    originY: element.originY || 'top',
-    angle: Number(element.rotation) || 0,
+    left:
+      Number(element.x) || 0,
+
+    top:
+      Number(element.y) || 0,
+
+    originX:
+      element.originX ||
+      'left',
+
+    originY:
+      element.originY ||
+      'top',
+
+    angle:
+      Number(element.rotation) ||
+      0,
+
     scaleX: 1,
     scaleY: 1,
     opacity: 1,
     visible: true,
 
-    certId: element.id,
-    certType: element.type,
-    certField: element.field || '',
+    certId:
+      element.id,
+
+    certType:
+      element.type,
+
+    certField:
+      element.field || '',
+
     certSource:
       element.src ||
       element.source ||
       '',
-    certShape: element.shape || '',
-    elementType: element.type,
-    fieldKey: element.field || '',
+
+    certShape:
+      element.shape || '',
+
+    elementType:
+      element.type,
+
+    fieldKey:
+      element.field || '',
   }
 
   if (
     element.type === 'text' ||
-    element.type === 'dynamic-text'
+    element.type ===
+      'dynamic-text'
   ) {
     return {
       ...base,
+
       type: 'Textbox',
 
       text:
-        element.type === 'dynamic-text'
+        element.type ===
+        'dynamic-text'
           ? `{{${element.field || 'field'}}}`
-          : element.text || 'Text',
+          : element.text ||
+            'Text',
 
       width:
-        Number(element.width) || 520,
+        Number(element.width) ||
+        520,
 
       height:
-        Number(element.height) || 70,
+        Number(element.height) ||
+        70,
 
       fontFamily:
-        element.fontFamily || 'Inter',
+        element.fontFamily ||
+        'Inter',
 
       fontSize:
-        Number(element.fontSize) || 42,
+        Number(element.fontSize) ||
+        42,
 
       fontWeight:
-        element.fontWeight || '600',
+        element.fontWeight ||
+        '600',
 
       fontStyle:
-        element.fontStyle || 'normal',
+        element.fontStyle ||
+        'normal',
 
       underline:
-        Boolean(element.underline),
+        Boolean(
+          element.underline,
+        ),
 
       fill:
-        element.color || '#172033',
+        element.color ||
+        '#172033',
 
       textAlign:
         element.textAlign ||
@@ -326,19 +606,25 @@ function legacyElementToFabricObject(element) {
         'center',
 
       charSpacing:
-        Number(element.letterSpacing) || 0,
+        Number(
+          element.letterSpacing,
+        ) || 0,
 
       lineHeight:
-        Number(element.lineHeight) || 1.2,
+        Number(
+          element.lineHeight,
+        ) || 1.2,
     }
   }
 
   if (
     element.type === 'image' ||
-    element.type === 'signature'
+    element.type ===
+      'signature'
   ) {
     return {
       ...base,
+
       type: 'Image',
 
       src:
@@ -347,51 +633,69 @@ function legacyElementToFabricObject(element) {
         '',
 
       width:
-        Number(element.width) || 240,
+        Number(element.width) ||
+        240,
 
       height:
-        Number(element.height) || 120,
+        Number(element.height) ||
+        120,
 
       desiredWidth:
-        Number(element.width) || 240,
+        Number(element.width) ||
+        240,
 
       desiredHeight:
-        Number(element.height) || 120,
+        Number(element.height) ||
+        120,
     }
   }
 
-  if (element.type === 'shape') {
+  if (
+    element.type ===
+    'shape'
+  ) {
     return {
       ...base,
+
       type: 'Rect',
 
       width:
-        Number(element.width) || 220,
+        Number(element.width) ||
+        220,
 
       height:
-        Number(element.height) || 120,
+        Number(element.height) ||
+        120,
 
       fill:
-        element.fill || '#ffffff',
+        element.fill ||
+        '#ffffff',
 
       stroke:
-        element.stroke || '#172033',
+        element.stroke ||
+        '#172033',
 
       strokeWidth:
-        Number(element.strokeWidth) || 1,
+        Number(
+          element.strokeWidth,
+        ) || 1,
     }
   }
 
   return {
     ...base,
+
     type: 'Textbox',
+
     text: 'QR',
 
     width:
-      Number(element.width) || 150,
+      Number(element.width) ||
+      150,
 
     height:
-      Number(element.height) || 150,
+      Number(element.height) ||
+      150,
 
     fontSize: 34,
     fontWeight: '700',
@@ -400,7 +704,9 @@ function legacyElementToFabricObject(element) {
   }
 }
 
-function designToFabricJson(template) {
+function designToFabricJson(
+  template,
+) {
   const design =
     template.design?.toObject?.() ||
     template.design ||
@@ -409,21 +715,23 @@ function designToFabricJson(template) {
   const width =
     Number(
       design.width ||
-      template.width,
+        template.width,
     ) || 1600
 
   const height =
     Number(
       design.height ||
-      template.height,
+        template.height,
     ) || 1100
 
   if (
-    design.fabricJson?.objects?.length
+    design.fabricJson?.objects
+      ?.length
   ) {
     return {
       width,
       height,
+
       json: JSON.parse(
         JSON.stringify(
           design.fabricJson,
@@ -435,12 +743,15 @@ function designToFabricJson(template) {
   const objects = []
 
   if (
-    design.background?.type === 'image' &&
+    design.background
+      ?.type === 'image' &&
     design.background.src
   ) {
     objects.push({
       type: 'Image',
-      src: design.background.src,
+
+      src:
+        design.background.src,
 
       left: 0,
       top: 0,
@@ -461,13 +772,19 @@ function designToFabricJson(template) {
       evented: false,
 
       isBackground: true,
-      certType: 'background',
-      elementType: 'background',
+
+      certType:
+        'background',
+
+      elementType:
+        'background',
     })
   }
 
   objects.push(
-    ...(design.elements || []).map(
+    ...(design.elements ||
+      []
+    ).map(
       legacyElementToFabricObject,
     ),
   )
@@ -475,6 +792,7 @@ function designToFabricJson(template) {
   return {
     width,
     height,
+
     json: {
       version: '7.4.0',
       objects,
@@ -482,8 +800,13 @@ function designToFabricJson(template) {
   }
 }
 
-function normalizeAssetSource(src) {
-  if (!src || src.startsWith('data:')) {
+function normalizeAssetSource(
+  src,
+) {
+  if (
+    !src ||
+    src.startsWith('data:')
+  ) {
     return src
   }
 
@@ -491,11 +814,15 @@ function normalizeAssetSource(src) {
     uploadSourcePath(src)
 
   return absolutePath
-    ? fileToDataUri(absolutePath)
+    ? fileToDataUri(
+        absolutePath,
+      )
     : src
 }
 
-function hydrateFabricAssetSources(value) {
+function hydrateFabricAssetSources(
+  value,
+) {
   if (Array.isArray(value)) {
     return value.map(
       hydrateFabricAssetSources,
@@ -504,18 +831,26 @@ function hydrateFabricAssetSources(value) {
 
   if (
     !value ||
-    typeof value !== 'object'
+    typeof value !==
+      'object'
   ) {
     return value
   }
 
   const next = {}
 
-  for (const [key, child] of Object.entries(value)) {
+  for (
+    const [key, child] of
+    Object.entries(value)
+  ) {
     next[key] =
       key === 'src'
-        ? normalizeAssetSource(child)
-        : hydrateFabricAssetSources(child)
+        ? normalizeAssetSource(
+            child,
+          )
+        : hydrateFabricAssetSources(
+            child,
+          )
   }
 
   return next
@@ -527,47 +862,65 @@ function resolveFabricDynamicText(
   mapping,
   isSingle,
 ) {
-  canvas.getObjects().forEach(
-    (object) => {
-      if (
-        object.elementType === 'dynamic-text' ||
-        object.certType === 'dynamic-text'
-      ) {
-        const field =
-          object.fieldKey ||
-          object.certField
+  canvas
+    .getObjects()
+    .forEach(
+      (object) => {
+        if (
+          object.elementType ===
+            'dynamic-text' ||
+          object.certType ===
+            'dynamic-text'
+        ) {
+          const field =
+            object.fieldKey ||
+            object.certField
 
-        const resolved = String(
-          resolveRowValue(
-            row,
-            field,
-            mapping,
-          ) || '',
-        )
+          const resolved =
+            String(
+              resolveRowValue(
+                row,
+                field,
+                mapping,
+              ) || '',
+            )
 
-        object.set(
-          'text',
-          isSingle && !resolved
-            ? humanizeField(field)
-            : resolved,
-        )
+          object.set(
+            'text',
+            isSingle &&
+            !resolved
+              ? humanizeField(
+                  field,
+                )
+              : resolved,
+          )
 
-        object.setCoords()
-      }
-    },
-  )
+          object.setCoords()
+        }
+      },
+    )
 }
 
-function prepareRenderTemplate(template) {
-  const { width, height, json } =
-    designToFabricJson(template)
+function prepareRenderTemplate(
+  template,
+) {
+  const {
+    width,
+    height,
+    json,
+  } =
+    designToFabricJson(
+      template,
+    )
 
   return {
     width,
     height,
 
     json:
-      hydrateFabricAssetSources(json),
+      hydrateFabricAssetSources(
+        json,
+      ),
   }
 }
 
@@ -582,7 +935,9 @@ async function renderFabricDataUrl({
 }) {
   const prepared =
     preparedTemplate ||
-    prepareRenderTemplate(template)
+    prepareRenderTemplate(
+      template,
+    )
 
   const {
     width,
@@ -591,12 +946,19 @@ async function renderFabricDataUrl({
   } = prepared
 
   const canvas =
-    new fabric.StaticCanvas(null, {
-      width,
-      height,
-      backgroundColor: '#ffffff',
-      enableRetinaScaling: false,
-    })
+    new fabric.StaticCanvas(
+      null,
+      {
+        width,
+        height,
+
+        backgroundColor:
+          '#ffffff',
+
+        enableRetinaScaling:
+          false,
+      },
+    )
 
   try {
     await canvas.loadFromJSON(
@@ -605,66 +967,77 @@ async function renderFabricDataUrl({
       ),
     )
 
-    canvas.getObjects().forEach(
-      (object) => {
-        if (
-          object.isBackground ||
-          object.elementType ===
-            'background' ||
-          object.certType ===
-            'background'
-        ) {
-          object.set({
-            left: 0,
-            top: 0,
-
-            originX: 'left',
-            originY: 'top',
-
-            scaleX:
-              width /
-              (object.width || width),
-
-            scaleY:
-              height /
-              (object.height || height),
-
-            selectable: false,
-            evented: false,
-          })
-
-          canvas.sendObjectToBack(object)
-        } else if (
-          (
+    canvas
+      .getObjects()
+      .forEach(
+        (object) => {
+          if (
+            object.isBackground ||
             object.elementType ===
-              'image' ||
-            object.certType === 'image' ||
-            object.elementType ===
-              'signature'
-          ) &&
-          object.desiredWidth &&
-          object.desiredHeight
-        ) {
-          object.set({
-            scaleX:
-              object.desiredWidth /
-              (
-                object.width ||
-                object.desiredWidth
-              ),
+              'background' ||
+            object.certType ===
+              'background'
+          ) {
+            object.set({
+              left: 0,
+              top: 0,
 
-            scaleY:
-              object.desiredHeight /
-              (
-                object.height ||
-                object.desiredHeight
-              ),
-          })
-        }
+              originX: 'left',
+              originY: 'top',
 
-        object.setCoords()
-      },
-    )
+              scaleX:
+                width /
+                (
+                  object.width ||
+                  width
+                ),
+
+              scaleY:
+                height /
+                (
+                  object.height ||
+                  height
+                ),
+
+              selectable: false,
+              evented: false,
+            })
+
+            canvas.sendObjectToBack(
+              object,
+            )
+          } else if (
+            (
+              object.elementType ===
+                'image' ||
+              object.certType ===
+                'image' ||
+              object.elementType ===
+                'signature'
+            ) &&
+            object.desiredWidth &&
+            object.desiredHeight
+          ) {
+            object.set({
+              scaleX:
+                object.desiredWidth /
+                (
+                  object.width ||
+                  object.desiredWidth
+                ),
+
+              scaleY:
+                object.desiredHeight /
+                (
+                  object.height ||
+                  object.desiredHeight
+                ),
+            })
+          }
+
+          object.setCoords()
+        },
+      )
 
     resolveFabricDynamicText(
       canvas,
@@ -688,6 +1061,7 @@ async function renderFabricDataUrl({
               : 'png',
 
           quality: 0.95,
+
           multiplier,
         }),
     }
@@ -709,7 +1083,9 @@ async function buildPdf({
       preparedTemplate,
       row,
       mapping,
+
       format: 'jpeg',
+
       singleMode,
     })
 
@@ -741,11 +1117,15 @@ async function buildPdf({
 
     `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>`,
 
-    `<< /Length ${contentBuffer.length} >>\nstream\n${contentBuffer.toString('binary')}\nendstream`,
+    `<< /Length ${contentBuffer.length} >>\nstream\n${contentBuffer.toString(
+      'binary',
+    )}\nendstream`,
   ]
 
   objects.push(
-    `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBuffer.length} >>\nstream\n${imageBuffer.toString('binary')}\nendstream`,
+    `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBuffer.length} >>\nstream\n${imageBuffer.toString(
+      'binary',
+    )}\nendstream`,
   )
 
   objects.push(
@@ -763,8 +1143,10 @@ async function buildPdf({
   const offsets = [0]
 
   for (
-    const [index, object] of
-    objects.entries()
+    const [
+      index,
+      object,
+    ] of objects.entries()
   ) {
     offsets.push(
       Buffer.byteLength(
@@ -790,16 +1172,24 @@ async function buildPdf({
 
   for (
     let index = 1;
-    index <= objects.length;
+    index <=
+    objects.length;
     index += 1
   ) {
     chunks.push(
-      `${String(offsets[index]).padStart(10, '0')} 00000 n \n`,
+      `${String(
+        offsets[index],
+      ).padStart(
+        10,
+        '0',
+      )} 00000 n \n`,
     )
   }
 
   chunks.push(
-    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+    `trailer\n<< /Size ${
+      objects.length + 1
+    } /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
   )
 
   return Buffer.from(
@@ -808,7 +1198,9 @@ async function buildPdf({
   )
 }
 
-function outputExtension(format) {
+function outputExtension(
+  format,
+) {
   if (
     format === 'jpg' ||
     format === 'jpeg'
@@ -867,7 +1259,9 @@ async function renderGeneratedBuffer({
   )
 }
 
-function mimeForFormat(format) {
+function mimeForFormat(
+  format,
+) {
   if (format === 'png') {
     return 'image/png'
   }
@@ -892,11 +1286,15 @@ async function createGeneratedFiles(
 ) {
   await fs.mkdir(
     GENERATED_DIR,
-    { recursive: true },
+    {
+      recursive: true,
+    },
   )
 
   const single =
-    isSingleGeneration(generation)
+    isSingleGeneration(
+      generation,
+    )
 
   let rows
 
@@ -911,12 +1309,14 @@ async function createGeneratedFiles(
       )
 
     rows =
-      requestScope === 'selected'
+      requestScope ===
+      'selected'
         ? dataFile.rows.filter(
             (row, index) =>
               selectedSet.has(
                 String(
-                  row._id || index,
+                  row._id ||
+                    index,
                 ),
               ) ||
               selectedSet.has(
@@ -943,16 +1343,17 @@ async function createGeneratedFiles(
       ? {
           design:
             generation.design,
+
           width:
             template.width,
+
           height:
             template.height,
         }
       : template
 
-  // IMPORTANT:
-  // Prepare the Fabric JSON and local image assets
-  // only once instead of doing it for every row.
+  // Prepare Fabric JSON and local image
+  // assets only once.
   const preparedTemplate =
     prepareRenderTemplate(
       renderTemplate,
@@ -965,15 +1366,20 @@ async function createGeneratedFiles(
 
   async function worker() {
     while (true) {
-      const index = nextIndex
+      const index =
+        nextIndex
 
-      if (index >= rows.length) {
+      if (
+        index >=
+        rows.length
+      ) {
         return
       }
 
       nextIndex += 1
 
-      const row = rows[index]
+      const row =
+        rows[index]
 
       const extension =
         outputExtension(
@@ -992,17 +1398,27 @@ async function createGeneratedFiles(
       try {
         await fs.rm(
           absolutePath,
-          { force: true },
+          {
+            force: true,
+          },
         )
 
         const buffer =
           await renderGeneratedBuffer({
-            template: renderTemplate,
+            template:
+              renderTemplate,
+
             preparedTemplate,
+
             row,
+
             mapping,
-            format: safeFormat,
-            singleMode: single,
+
+            format:
+              safeFormat,
+
+            singleMode:
+              single,
           })
 
         await fs.writeFile(
@@ -1012,15 +1428,21 @@ async function createGeneratedFiles(
 
         results[index] = {
           fileName,
+
           filePath:
             `/uploads/generated/${fileName}`,
-          format: safeFormat,
-          recordIndex: index,
+
+          format:
+            safeFormat,
+
+          recordIndex:
+            index,
         }
       } catch (error) {
         results[index] = {
           error,
-          recordIndex: index,
+          recordIndex:
+            index,
         }
       }
     }
@@ -1029,12 +1451,18 @@ async function createGeneratedFiles(
   const workerCount =
     Math.min(
       GENERATION_CONCURRENCY,
-      Math.max(rows.length, 1),
+      Math.max(
+        rows.length,
+        1,
+      ),
     )
 
   await Promise.all(
     Array.from(
-      { length: workerCount },
+      {
+        length:
+          workerCount,
+      },
       () => worker(),
     ),
   )
@@ -1053,9 +1481,14 @@ async function createGeneratedFiles(
         result.error,
     )
 
-  for (const failed of failedFiles) {
+  for (
+    const failed of
+    failedFiles
+  ) {
     console.error(
-      `Failed to generate certificate ${failed.recordIndex + 1}:`,
+      `Failed to generate certificate ${
+        failed.recordIndex + 1
+      }:`,
       failed.error?.message ||
         failed.error,
     )
@@ -1070,11 +1503,12 @@ async function runGeneration(
   dataFile,
   mapping,
 ) {
-  // Prevent duplicate generation when
-  // multiple frontend polling requests arrive.
+  // Prevent duplicate generation.
   if (
-    generation.status === 'completed' ||
-    generation.status === 'failed'
+    generation.status ===
+      'completed' ||
+    generation.status ===
+      'failed'
   ) {
     return generation
   }
@@ -1121,12 +1555,12 @@ async function runGeneration(
       )
 
     generation.generatedFilePath =
-      generatedFiles[0]?.filePath ||
-      ''
+      generatedFiles[0]
+        ?.filePath || ''
 
     generation.fileUrl =
-      generatedFiles[0]?.filePath ||
-      ''
+      generatedFiles[0]
+        ?.filePath || ''
 
     generation.status =
       'completed'
@@ -1239,14 +1673,11 @@ async function createGeneration(
 
   const effectiveMapping =
     isSingle
-      ? (
-          fieldMapping || {}
-        )
-      : (
-          fieldMapping ||
-          Object.fromEntries(
-            template.fieldMapping || [],
-          )
+      ? fieldMapping || {}
+      : fieldMapping ||
+        Object.fromEntries(
+          template.fieldMapping ||
+            [],
         )
 
   const generation =
@@ -1282,17 +1713,16 @@ async function createGeneration(
         outputFormat,
 
       isArchived: false,
+
       archivedAt: null,
 
       totalRecords:
         isSingle
           ? 1
-          : (
-              requestScope ===
+          : requestScope ===
               'selected'
-                ? selectedRecordIds.length
-                : dataFile.recordCount
-            ),
+            ? selectedRecordIds.length
+            : dataFile.recordCount,
 
       outputFormat,
 
@@ -1307,19 +1737,70 @@ async function createGeneration(
         'processing',
     })
 
-  return runGeneration(
+  /*
+   * IMPORTANT:
+   *
+   * Do NOT await runGeneration().
+   *
+   * The generation can take several seconds,
+   * especially when Fabric is rendering many
+   * certificates.
+   *
+   * Return the generation immediately and let
+   * the result page poll its status.
+   */
+  runGeneration(
     generation,
     template,
     dataFile,
     effectiveMapping,
+  ).catch(
+    async (error) => {
+      console.error(
+        `Background generation failed for ${generation._id}:`,
+        error,
+      )
+
+      try {
+        await Generation.findByIdAndUpdate(
+          generation._id,
+          {
+            status:
+              'failed',
+
+            errorMessage:
+              error.message ||
+              'Generation failed',
+          },
+        )
+      } catch (
+        updateError
+      ) {
+        console.error(
+          'Failed to update generation failure status:',
+          updateError,
+        )
+      }
+    },
   )
+
+  return generation
 }
 
-async function listGenerations(user) {
+async function listGenerations(
+  user,
+) {
   const activeHistoryQuery = {
     $or: [
-      { isArchived: false },
-      { isArchived: { $exists: false } },
+      {
+        isArchived: false,
+      },
+
+      {
+        isArchived: {
+          $exists: false,
+        },
+      },
     ],
 
     createdAt: {
@@ -1346,12 +1827,14 @@ async function listGenerations(user) {
                   userId: {
                     $exists: false,
                   },
+
                   createdBy:
                     user._id,
                 },
 
                 {
                   userId: null,
+
                   createdBy:
                     user._id,
                 },
@@ -1360,7 +1843,9 @@ async function listGenerations(user) {
           ],
         }
 
-  return Generation.find(query)
+  return Generation.find(
+    query,
+  )
     .populate(
       'templateId',
       'name',
@@ -1379,9 +1864,15 @@ async function getGeneration(
   id,
 ) {
   const generation =
-    await Generation.findById(id)
-      .populate('templateId')
-      .populate('dataFileId')
+    await Generation.findById(
+      id,
+    )
+      .populate(
+        'templateId',
+      )
+      .populate(
+        'dataFileId',
+      )
 
   if (!generation) {
     throw new ApiError(
@@ -1405,11 +1896,11 @@ async function getGeneration(
   /*
    * IMPORTANT:
    *
-   * Do NOT call runGeneration() here.
+   * Do NOT call runGeneration()
+   * here.
    *
-   * The frontend polls this endpoint while generation
-   * is processing. Calling runGeneration() from GET
-   * could start the same generation a second time.
+   * The frontend polls this endpoint
+   * while generation is processing.
    */
   return generation
 }
@@ -1426,10 +1917,12 @@ function renderTemplateForGeneration(
         generation.design,
 
       width:
-        generation.templateId?.width,
+        generation.templateId
+          ?.width,
 
       height:
-        generation.templateId?.height,
+        generation.templateId
+          ?.height,
     }
   }
 
@@ -1443,8 +1936,8 @@ function rowsForGeneration(
     generation.dataFileId
   ) {
     return (
-      generation.dataFileId.rows ||
-      []
+      generation.dataFileId
+        .rows || []
     )
   }
 
@@ -1455,8 +1948,29 @@ async function prepareDownload(
   user,
   id,
 ) {
-  
-  const generation = await Generation.findById(id)
+  const generation =
+    await Generation.findById(
+      id,
+    )
+
+  if (!generation) {
+    throw new ApiError(
+      404,
+      'Generation not found',
+    )
+  }
+
+  if (
+    !canAccess(
+      user,
+      generation.createdBy,
+    )
+  ) {
+    throw new ApiError(
+      403,
+      'You do not have access to this generation',
+    )
+  }
 
   if (
     generation.status !==
@@ -1469,7 +1983,8 @@ async function prepareDownload(
   }
 
   if (
-    !generation.generatedFiles.length
+    !generation.generatedFiles
+      ?.length
   ) {
     throw new ApiError(
       404,
@@ -1495,7 +2010,29 @@ async function prepareDownloadArchive(
       ? format
       : 'pdf'
 
- const generation = await Generation.findById(id)
+  const generation =
+    await Generation.findById(
+      id,
+    )
+
+  if (!generation) {
+    throw new ApiError(
+      404,
+      'Generation not found',
+    )
+  }
+
+  if (
+    !canAccess(
+      user,
+      generation.createdBy,
+    )
+  ) {
+    throw new ApiError(
+      403,
+      'You do not have access to this generation',
+    )
+  }
 
   if (
     generation.status !==
@@ -1508,7 +2045,8 @@ async function prepareDownloadArchive(
   }
 
   if (
-    !generation.generatedFiles.length
+    !generation.generatedFiles
+      ?.length
   ) {
     throw new ApiError(
       404,
@@ -1517,10 +2055,8 @@ async function prepareDownloadArchive(
   }
 
   /*
-   * IMPORTANT:
-   *
    * Download All NEVER renders certificates again.
-   * It only reads the files already generated.
+   * It only reads the already-generated files.
    */
   const generatedFormat =
     generation.outputFormat ||
@@ -1565,9 +2101,12 @@ async function prepareDownloadArchive(
       archiveFiles.push({
         name:
           file.fileName ||
-          `certificate-${(
-            file.recordIndex || 0
-          ) + 1}.${outputExtension(
+          `certificate-${
+            (
+              file.recordIndex ||
+              0
+            ) + 1
+          }.${outputExtension(
             generatedFormat,
           )}`,
 
@@ -1581,7 +2120,9 @@ async function prepareDownloadArchive(
     }
   }
 
-  if (!archiveFiles.length) {
+  if (
+    !archiveFiles.length
+  ) {
     throw new ApiError(
       404,
       'Generated files could not be found on the server',
@@ -1618,7 +2159,37 @@ async function prepareSingleDownload(
       ? format
       : 'pdf'
 
-  Generation.findById(id)
+  /*
+   * IMPORTANT:
+   *
+   * Get the generation document directly.
+   * Do NOT use getGeneration() here because
+   * downloads do not need template/dataFile
+   * population.
+   */
+  const generation =
+    await Generation.findById(
+      id,
+    )
+
+  if (!generation) {
+    throw new ApiError(
+      404,
+      'Generation not found',
+    )
+  }
+
+  if (
+    !canAccess(
+      user,
+      generation.createdBy,
+    )
+  ) {
+    throw new ApiError(
+      403,
+      'You do not have access to this generation',
+    )
+  }
 
   if (
     generation.status !==
@@ -1636,14 +2207,16 @@ async function prepareSingleDownload(
   /*
    * IMPORTANT:
    *
-   * Find the already-generated certificate
-   * instead of rendering it again.
+   * Find the already-generated certificate.
+   *
+   * DO NOT render it again.
    */
   const file =
-    generation.generatedFiles.find(
+    generation.generatedFiles?.find(
       (item) =>
-        Number(item.recordIndex) ===
-        index,
+        Number(
+          item.recordIndex,
+        ) === index,
     )
 
   if (!file) {
@@ -1698,7 +2271,7 @@ async function prepareSingleDownload(
   } catch (error) {
     console.error(
       `Unable to read generated certificate: ${absolutePath}`,
-      error.message,
+      error,
     )
 
     throw new ApiError(
