@@ -2627,3 +2627,19 @@ module.exports = {
   prepareDownloadArchive,
   prepareSingleDownload,
 }
+function mimeForFormat(format) {
+  switch (format) {
+    case 'png':
+      return 'image/png'
+
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+
+    case 'pdf':
+      return 'application/pdf'
+
+    default:
+      return 'application/octet-stream'
+  }
+}
