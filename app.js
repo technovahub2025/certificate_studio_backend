@@ -7,6 +7,7 @@ const templateRoutes = require('./routes/templateRoutes')
 const dataRoutes = require('./routes/dataRoutes')
 const generationRoutes = require('./routes/generationRoutes')
 const historyRoutes = require('./routes/historyRoutes')
+const templateFileController = require('./controllers/templateFileController')
 
 const { notFound, errorHandler } = require('./middleware/errorMiddleware')
 
@@ -80,6 +81,7 @@ app.get('/', (req, res) => {
 // API Routes
 // ==========================================
 app.use('/api/auth', authRoutes)
+app.get('/api/templates/file/:id', templateFileController.getTemplateFile)
 app.use('/api/templates', templateRoutes)
 app.use('/api/data', dataRoutes)
 app.use('/api/generations', generationRoutes)

@@ -63,6 +63,21 @@ const templateSchema = new mongoose.Schema(
       default: 'single',
     },
     originalFile: String,
+
+    gridfsFileId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+
+    gridfsFilename: {
+      type: String,
+      default: '',
+    },
+
+    gridfsContentType: {
+      type: String,
+      default: '',
+    },
     thumbnail: String,
     fileType: {
       type: String,

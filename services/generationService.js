@@ -801,60 +801,79 @@ function designToFabricJson(
   }
 }
 
-function normalizeAssetSource(
-  src,
-) {
-  if (
-    !src ||
-    src.startsWith('data:')
-  ) {
+async function normalizeAssetSource(src) {
+  if (!src || src.startsWith('data:')) {
     return src
+  }
+
+  const gridfsMatch = src.match(
+    /\/api\/templates\/file\/([a-f0-9]{24})$/i,
+  )
+
+  if (gridfsMatch) {
+    const { downloadFromGridFS } =
+      require('../utils/gridfs')
+
+    const stream = downloadFromGridFS(
+      gridfsMatch[1],
+    )
+
+    const chunks = []
+
+    for await (const chunk of stream) {
+      chunks.push(chunk)
+    }
+
+    const buffer = Buffer.concat(chunks)
+
+    let mime = 'image/png'
+
+    return `data:${mime};base64,${buffer.toString('base64')}`
   }
 
   const absolutePath =
     uploadSourcePath(src)
 
   return absolutePath
-    ? fileToDataUri(
-        absolutePath,
-      )
+    ? fileToDataUri(absolutePath)
     : src
 }
 
-function hydrateFabricAssetSources(
-  value,
-) {
+async function hydrateFabricAssetSources(value) {
   if (Array.isArray(value)) {
-    return value.map(
-      hydrateFabricAssetSources,
+    return Promise.all(
+      value.map(hydrateFabricAssetSources),
     )
   }
 
-  if (
-    !value ||
-    typeof value !==
-      'object'
-  ) {
+  if (!value || typeof value !== 'object') {
     return value
   }
 
   const next = {}
 
-  for (
-    const [key, child] of
-    Object.entries(value)
-  ) {
+  for (const [key, child] of Object.entries(value)) {
     next[key] =
       key === 'src'
-        ? normalizeAssetSource(
-            child,
-          )
-        : hydrateFabricAssetSources(
-            child,
-          )
+        ? await normalizeAssetSource(child)
+        : await hydrateFabricAssetSources(child)
   }
 
   return next
+}
+
+async function prepareRenderTemplate(template) {
+  const {
+    width,
+    height,
+    json,
+  } = designToFabricJson(template)
+
+  return {
+    width,
+    height,
+    json: await hydrateFabricAssetSources(json),
+  }
 }
 
 function resolveFabricDynamicText(
@@ -900,29 +919,6 @@ function resolveFabricDynamicText(
         }
       },
     )
-}
-
-function prepareRenderTemplate(
-  template,
-) {
-  const {
-    width,
-    height,
-    json,
-  } =
-    designToFabricJson(
-      template,
-    )
-
-  return {
-    width,
-    height,
-
-    json:
-      hydrateFabricAssetSources(
-        json,
-      ),
-  }
 }
 
 /*
@@ -1106,7 +1102,7 @@ async function renderFabricDataUrl({
 }) {
   const prepared =
     preparedTemplate ||
-    prepareRenderTemplate(
+    await prepareRenderTemplate(
       template,
     )
 
@@ -1517,7 +1513,7 @@ async function createGeneratedFiles(
    * assets only once for the entire generation.
    */
   const preparedTemplate =
-    prepareRenderTemplate(
+    await prepareRenderTemplate(
       renderTemplate,
     )
 
