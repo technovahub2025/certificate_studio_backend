@@ -349,7 +349,8 @@ function normalizeKey(value) {
     )
     .replace(
       /^_+|_+$/g,
-      '')
+      '',
+    )
 }
 
 function humanizeField(field) {
@@ -924,6 +925,176 @@ function prepareRenderTemplate(
   }
 }
 
+/*
+ * Creates ONE Fabric canvas for a worker.
+ *
+ * The certificate background/template is loaded
+ * only once and then reused for multiple rows.
+ */
+async function createFabricWorkerRenderer({
+  preparedTemplate,
+  format,
+  singleMode = false,
+}) {
+  const {
+    width,
+    height,
+    json,
+  } = preparedTemplate
+
+  const canvas =
+    new fabric.StaticCanvas(
+      null,
+      {
+        width,
+        height,
+
+        backgroundColor:
+          '#ffffff',
+
+        enableRetinaScaling:
+          false,
+      },
+    )
+
+  try {
+    await canvas.loadFromJSON(
+      JSON.parse(
+        JSON.stringify(json),
+      ),
+    )
+
+    canvas
+      .getObjects()
+      .forEach(
+        (object) => {
+          if (
+            object.isBackground ||
+            object.elementType ===
+              'background' ||
+            object.certType ===
+              'background'
+          ) {
+            object.set({
+              left: 0,
+              top: 0,
+
+              originX: 'left',
+              originY: 'top',
+
+              scaleX:
+                width /
+                (
+                  object.width ||
+                  width
+                ),
+
+              scaleY:
+                height /
+                (
+                  object.height ||
+                  height
+                ),
+
+              selectable: false,
+              evented: false,
+            })
+
+            canvas.sendObjectToBack(
+              object,
+            )
+          } else if (
+            (
+              object.elementType ===
+                'image' ||
+              object.certType ===
+                'image' ||
+              object.elementType ===
+                'signature'
+            ) &&
+            object.desiredWidth &&
+            object.desiredHeight
+          ) {
+            object.set({
+              scaleX:
+                object.desiredWidth /
+                (
+                  object.width ||
+                  object.desiredWidth
+                ),
+
+              scaleY:
+                object.desiredHeight /
+                (
+                  object.height ||
+                  object.desiredHeight
+                ),
+            })
+          }
+
+          object.setCoords()
+        },
+      )
+
+    return {
+      canvas,
+      width,
+      height,
+      format,
+      singleMode,
+    }
+  } catch (error) {
+    canvas.dispose()
+    throw error
+  }
+}
+
+/*
+ * Reuses an existing Fabric canvas.
+ *
+ * Only dynamic text is changed for each row.
+ */
+function renderFromFabricWorker(
+  renderer,
+  row,
+  mapping,
+) {
+  const {
+    canvas,
+    width,
+    height,
+    format,
+    singleMode,
+  } = renderer
+
+  resolveFabricDynamicText(
+    canvas,
+    row,
+    mapping,
+    singleMode,
+  )
+
+  canvas.renderAll()
+
+  return {
+    width,
+    height,
+
+    dataUrl:
+      canvas.toDataURL({
+        format:
+          format === 'jpeg' ||
+          format === 'jpg'
+            ? 'jpeg'
+            : 'png',
+
+        quality: 0.95,
+
+        multiplier: 1,
+      }),
+  }
+}
+
 async function renderFabricDataUrl({
   template,
   preparedTemplate,
@@ -1259,23 +1430,12 @@ async function renderGeneratedBuffer({
   )
 }
 
-function mimeForFormat(
-  format,
-) {
-  if (format === 'png') {
-    return 'image/png'
-  }
-
-  if (
-    format === 'jpg' ||
-    format === 'jpeg'
-  ) {
-    return 'image/jpeg'
-  }
-
-  return 'application/pdf'
-}
-
+/*
+ * Optimized bulk generation.
+ *
+ * Each worker creates ONE Fabric canvas and reuses it
+ * for all certificates assigned to that worker.
+ */
 async function createGeneratedFiles(
   generation,
   template,
@@ -1352,8 +1512,10 @@ async function createGeneratedFiles(
         }
       : template
 
-  // Prepare Fabric JSON and local image
-  // assets only once.
+  /*
+   * Prepare Fabric JSON and local image
+   * assets only once for the entire generation.
+   */
   const preparedTemplate =
     prepareRenderTemplate(
       renderTemplate,
@@ -1365,85 +1527,244 @@ async function createGeneratedFiles(
   let nextIndex = 0
 
   async function worker() {
-    while (true) {
-      const index =
-        nextIndex
+    let renderer = null
 
-      if (
-        index >=
-        rows.length
-      ) {
-        return
-      }
-
-      nextIndex += 1
-
-      const row =
-        rows[index]
-
-      const extension =
-        outputExtension(
-          safeFormat,
-        )
-
-      const fileName =
-        `${generation._id}-${index + 1}.${extension}`
-
-      const absolutePath =
-        path.join(
-          GENERATED_DIR,
-          fileName,
-        )
-
-      try {
-        await fs.rm(
-          absolutePath,
-          {
-            force: true,
-          },
-        )
-
-        const buffer =
-          await renderGeneratedBuffer({
-            template:
-              renderTemplate,
-
-            preparedTemplate,
-
-            row,
-
-            mapping,
-
-            format:
-              safeFormat,
-
-            singleMode:
-              single,
-          })
-
-        await fs.writeFile(
-          absolutePath,
-          buffer,
-        )
-
-        results[index] = {
-          fileName,
-
-          filePath:
-            `/uploads/generated/${fileName}`,
+    try {
+      /*
+       * IMPORTANT:
+       *
+       * Load the template/background only once
+       * for this worker.
+       */
+      renderer =
+        await createFabricWorkerRenderer({
+          preparedTemplate,
 
           format:
             safeFormat,
 
-          recordIndex:
-            index,
+          singleMode:
+            single,
+        })
+
+      while (true) {
+        const index =
+          nextIndex
+
+        if (
+          index >=
+          rows.length
+        ) {
+          return
         }
-      } catch (error) {
+
+        nextIndex += 1
+
+        const row =
+          rows[index]
+
+        const extension =
+          outputExtension(
+            safeFormat,
+          )
+
+        const fileName =
+          `${generation._id}-${index + 1}.${extension}`
+
+        const absolutePath =
+          path.join(
+            GENERATED_DIR,
+            fileName,
+          )
+
+        try {
+          await fs.rm(
+            absolutePath,
+            {
+              force: true,
+            },
+          )
+
+          const rendered =
+            renderFromFabricWorker(
+              renderer,
+              row,
+              mapping,
+            )
+
+          let buffer
+
+          /*
+           * PDF generation.
+           *
+           * Reuse the already-rendered JPEG
+           * instead of creating another Fabric canvas.
+           */
+          if (
+            safeFormat === 'pdf'
+          ) {
+            const imageBuffer =
+              dataUrlToBuffer(
+                rendered.dataUrl,
+              )
+
+            const width =
+              rendered.width
+
+            const height =
+              rendered.height
+
+            const contentBuffer =
+              Buffer.from(
+                `q ${width} 0 0 ${height} 0 0 cm /Im0 Do Q`,
+                'utf8',
+              )
+
+            const objects = [
+              '<< /Type /Catalog /Pages 2 0 R >>',
+
+              '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+
+              `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>`,
+
+              `<< /Length ${contentBuffer.length} >>\nstream\n${contentBuffer.toString(
+                'binary',
+              )}\nendstream`,
+
+              `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBuffer.length} >>\nstream\n${imageBuffer.toString(
+                'binary',
+              )}\nendstream`,
+
+              '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+
+              '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+            ]
+
+            const chunks = [
+              '%PDF-1.4\n',
+            ]
+
+            const offsets = [0]
+
+            for (
+              const [
+                objectIndex,
+                object,
+              ] of objects.entries()
+            ) {
+              offsets.push(
+                Buffer.byteLength(
+                  chunks.join(''),
+                  'binary',
+                ),
+              )
+
+              chunks.push(
+                `${objectIndex + 1} 0 obj\n${object}\nendobj\n`,
+              )
+            }
+
+            const xrefOffset =
+              Buffer.byteLength(
+                chunks.join(''),
+                'binary',
+              )
+
+            chunks.push(
+              `xref\n0 ${
+                objects.length + 1
+              }\n0000000000 65535 f \n`,
+            )
+
+            for (
+              let objectIndex = 1;
+              objectIndex <=
+              objects.length;
+              objectIndex += 1
+            ) {
+              chunks.push(
+                `${String(
+                  offsets[
+                    objectIndex
+                  ],
+                ).padStart(
+                  10,
+                  '0',
+                )} 00000 n \n`,
+              )
+            }
+
+            chunks.push(
+              `trailer\n<< /Size ${
+                objects.length + 1
+              } /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+            )
+
+            buffer =
+              Buffer.from(
+                chunks.join(''),
+                'binary',
+              )
+          } else {
+            buffer =
+              dataUrlToBuffer(
+                rendered.dataUrl,
+              )
+          }
+
+          await fs.writeFile(
+            absolutePath,
+            buffer,
+          )
+
+          results[index] = {
+            fileName,
+
+            filePath:
+              `/uploads/generated/${fileName}`,
+
+            format:
+              safeFormat,
+
+            recordIndex:
+              index,
+          }
+        } catch (error) {
+          results[index] = {
+            error,
+
+            recordIndex:
+              index,
+          }
+        }
+      }
+    } catch (error) {
+      /*
+       * If a worker cannot create its Fabric canvas,
+       * mark the records assigned to it as failed.
+       */
+      while (true) {
+        const index =
+          nextIndex
+
+        if (
+          index >=
+          rows.length
+        ) {
+          break
+        }
+
+        nextIndex += 1
+
         results[index] = {
           error,
           recordIndex:
             index,
         }
+      }
+    } finally {
+      if (renderer?.canvas) {
+        renderer.canvas.dispose()
       }
     }
   }
@@ -1503,7 +1824,9 @@ async function runGeneration(
   dataFile,
   mapping,
 ) {
-  // Prevent duplicate generation.
+  /*
+   * Prevent duplicate generation.
+   */
   if (
     generation.status ===
       'completed' ||
